@@ -3,7 +3,7 @@ import time
 import torch
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from diffusers import StableDiffusionXLPipeline
+from diffusers import DiffusionPipeline
 import io
 import base64
 
@@ -12,138 +12,92 @@ app = Flask(__name__)
 CORS(app)
 
 print("=" * 50)
-print("🚀 DÉMARRAGE API SDXL - RENDER DEPLOYMENT")
+print("🚀 DÉMARRAGE API - MODÈLE LÉGER")
 print("=" * 50)
 
-# ==================== CONFIGURATION SDXL ====================
-print("📦 Étape 1/4: Chargement du modèle SDXL...")
+# ==================== MODÈLE LÉGER ====================
+print("📦 Étape 1/3: Chargement du modèle léger...")
 
 try:
-    # Configuration optimisée pour Render
-    pipe = StableDiffusionXLPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+    # Utiliser Stable Diffusion 1.5 au lieu de SDXL (BEAUCOUP plus léger)
+    pipe = DiffusionPipeline.from_pretrained(
+        "runwayml/stable-diffusion-v1-5",
         torch_dtype=torch.float16,
-        use_safetensors=True,
-        variant="fp16"
+        use_safetensors=True
     )
     
-    # Optimisations mémoire pour CPU
+    # Optimisations mémoire
     pipe.enable_attention_slicing()
     pipe.enable_memory_efficient_attention()
     
-    # Détection automatique device
     if torch.cuda.is_available():
         pipe = pipe.to("cuda")
         device = "cuda"
-        print("✅ SDXL chargé sur GPU NVIDIA!")
+        print("✅ Modèle chargé sur GPU!")
     else:
         pipe = pipe.to("cpu") 
         device = "cpu"
-        print("✅ SDXL chargé sur CPU!")
+        print("✅ Modèle chargé sur CPU!")
         
 except Exception as e:
-    print(f"❌ ERREUR CRITIQUE: {e}")
-    print("💡 Conseil: Vérifie la connexion internet et l'espace disque")
+    print(f"❌ ERREUR: {e}")
     exit(1)
 
-# ==================== 8 STYLES OPTIMISÉS ====================
+# ==================== STYLES ====================
 STYLES = {
-    "realistic": "photorealistic, realistic lighting, professional photography, sharp focus, detailed",
-    "cinematic": "cinematic, movie still, dramatic lighting, film atmosphere, wide angle",
-    "horror": "horror atmosphere, scary, dark fantasy, gothic, haunted, ghostly, eerie lighting",
-    "fantasy": "fantasy art, magical realm, mythical creatures, epic fantasy, enchanted",
-    "surrealiste": "surrealism, dreamlike, bizarre, impossible reality, Salvador Dali style",
-    "cartoon": "cartoon style, animated series, bold outlines, vibrant flat colors, Disney style",
-    "pixart": "pixel art, 8-bit, 16-bit, retro gaming, low resolution, square pixels",
-    "abstract": "abstract art, non-representational, geometric shapes, color fields, expressive"
+    "realistic": "photorealistic, realistic lighting, professional photography",
+    "cinematic": "cinematic, movie still, dramatic lighting",
+    "horror": "horror atmosphere, scary, dark fantasy, eerie lighting",
+    "fantasy": "fantasy art, magical realm, mythical creatures",
+    "surrealiste": "surrealism, dreamlike, bizarre, impossible reality",
+    "cartoon": "cartoon style, bold outlines, vibrant colors",
+    "pixart": "pixel art, 8-bit, retro gaming",
+    "abstract": "abstract art, geometric shapes, expressive"
 }
 
-print("🎨 Étape 2/4: Styles chargés - 8 styles disponibles")
+print("🎨 Étape 2/3: Styles chargés - 8 styles disponibles")
 
 # ==================== ROUTES API ====================
 @app.route('/')
 def home():
-    """Page d'accueil de l'API"""
     return jsonify({
-        "service": "SDXL API - Render Deployment",
-        "version": "2.0",
+        "service": "Stable Diffusion API - Render",
         "status": "active",
         "device": device,
-        "endpoints": {
-            "home": "GET /",
-            "health": "GET /health", 
-            "styles": "GET /styles",
-            "generate": "POST /generate"
-        },
         "styles_available": list(STYLES.keys())
     })
 
 @app.route('/health')
 def health():
-    """Endpoint de santé"""
-    return jsonify({
-        "status": "healthy",
-        "device": device,
-        "timestamp": time.time()
-    })
+    return jsonify({"status": "healthy", "device": device})
 
 @app.route('/styles')
 def get_styles():
-    """Liste tous les styles disponibles"""
     return jsonify({
         "available_styles": list(STYLES.keys()),
-        "total_styles": len(STYLES),
-        "description": "Utilisez ces noms dans le champ 'style' de /generate"
+        "total_styles": len(STYLES)
     })
 
 @app.route('/generate', methods=['POST'])
 def generate_image():
-    """
-    Génère une image avec SDXL
-    Body JSON attendu:
-    {
-        "prompt": "votre description",
-        "style": "nom_du_style", 
-        "width": 512,
-        "height": 512,
-        "steps": 20
-    }
-    """
     try:
-        # Récupération des données
         data = request.json
-        
-        if not data:
-            return jsonify({"status": "error", "message": "Aucune donnée JSON fournie"}), 400
-        
         prompt = data.get('prompt', 'a beautiful landscape')
         style = data.get('style', 'cinematic')
-        width = min(data.get('width', 512), 512)   # Max 512 pour CPU
-        height = min(data.get('height', 512), 512) # Max 512 pour CPU
-        steps = min(data.get('steps', 20), 25)     # Max 25 steps
         
-        print(f"🎨 Génération demandée:")
-        print(f"   📝 Prompt: {prompt}")
-        print(f"   🎭 Style: {style}")
-        print(f"   📏 Dimensions: {width}x{height}")
-        print(f"   ⚡ Steps: {steps}")
+        # Réduire la résolution pour économiser mémoire
+        width = min(data.get('width', 384), 512)
+        height = min(data.get('height', 384), 512)
+        steps = min(data.get('steps', 15), 20)
         
-        # Vérification du style
-        if style not in STYLES:
-            return jsonify({
-                "status": "error", 
-                "message": f"Style '{style}' non disponible. Utilisez /styles pour voir la liste.",
-                "available_styles": list(STYLES.keys())
-            }), 400
+        print(f"🎨 Génération - Style: {style}")
         
-        # Application du style
-        style_prompt = STYLES[style]
-        full_prompt = f"{prompt}, {style_prompt}, masterpiece, best quality, highly detailed"
+        style_prompt = STYLES.get(style, STYLES['cinematic'])
+        full_prompt = f"{prompt}, {style_prompt}, masterpiece, best quality"
         
-        print("🔄 Étape 3/4: Génération de l'image en cours...")
+        print("🔄 Génération en cours...")
         start_time = time.time()
         
-        # Génération de l'image
         image = pipe(
             prompt=full_prompt,
             width=width,
@@ -153,51 +107,27 @@ def generate_image():
         ).images[0]
         
         generation_time = time.time() - start_time
+        print(f"✅ Image générée en {generation_time:.1f}s!")
         
-        print(f"✅ Étape 4/4: Image générée avec succès!")
-        print(f"   ⏱️  Temps: {generation_time:.1f} secondes")
-        print(f"   🖼️  Dimensions: {width}x{height}")
-        print(f"   🔧 Device: {device}")
-        
-        # Conversion en base64 pour transmission
+        # Conversion base64
         img_io = io.BytesIO()
-        image.save(img_io, 'PNG', quality=95)
+        image.save(img_io, 'PNG')
         img_io.seek(0)
-        img_base64 = base64.b64encode(img_io.getvalue()).decode('utf-8')
+        img_base64 = base64.b64encode(img_io.getvalue()).decode()
         
         return jsonify({
             "status": "success",
-            "message": "Image générée avec succès",
             "style": style,
             "image_data": f"data:image/png;base64,{img_base64}",
             "dimensions": f"{width}x{height}",
-            "steps": steps,
             "generation_time": f"{generation_time:.1f}s",
-            "device": device,
-            "timestamp": time.time()
+            "device": device
         })
         
     except Exception as e:
-        print(f"❌ ERREUR lors de la génération: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": f"Erreur lors de la génération: {str(e)}",
-            "advice": "Vérifiez votre prompt et réessayez avec moins de steps ou une résolution plus basse"
-        }), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-# ==================== LANCEMENT ====================
 if __name__ == '__main__':
-    print("🌍 Étape finale: Démarrage du serveur...")
-    
-    # Configuration Render
     port = int(os.environ.get('PORT', 10000))
-    host = '0.0.0.0'
-    
-    print(f"   📍 Host: {host}")
-    print(f"   🔌 Port: {port}")
-    print(f"   📁 Dossier: {os.getcwd()}")
-    print("=" * 50)
-    print("🚀 API SDXL PRÊTE À RECEVOIR DES REQUÊTES!")
-    print("=" * 50)
-    
-    app.run(host=host, port=port, debug=False)
+    print(f"🌍 Démarrage sur le port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
